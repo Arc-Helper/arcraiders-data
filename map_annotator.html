@@ -1,0 +1,112 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Arc Raiders – Map Annotator</title>
+<style>
+* { margin:0;padding:0;box-sizing:border-box; }
+body { background:#0e0e10;color:#e0e0e0;font-family:'Segoe UI',sans-serif;height:100vh;display:flex;flex-direction:column;overflow:hidden; }
+#toolbar { background:#1a1a1f;border-bottom:1px solid #2e2e3a;padding:10px 16px;display:flex;align-items:center;gap:12px;flex-wrap:wrap; }
+#toolbar h1 { font-size:14px;font-weight:600;color:#c8a84b;letter-spacing:1px;text-transform:uppercase; }
+.tool-group { display:flex;gap:6px;align-items:center; }
+.tool-group label { font-size:11px;color:#888;text-transform:uppercase; }
+button { background:#2a2a35;border:1px solid #3a3a48;color:#ccc;padding:6px 12px;border-radius:5px;font-size:12px;cursor:pointer; }
+button:hover { background:#35354a;color:#fff; }
+button.active { background:#c8a84b;color:#111;border-color:#c8a84b;font-weight:600; }
+.color-btn { width:24px;height:24px;border-radius:50%;border:2px solid transparent;cursor:pointer;padding:0; }
+.color-btn.active { border-color:#fff; }
+input[type=range] { width:80px;accent-color:#c8a84b; }
+#canvas-wrap { flex:1;position:relative;overflow:hidden;cursor:crosshair; }
+#bg-canvas,#draw-canvas { position:absolute;top:0;left:0; }
+#hint { position:absolute;bottom:12px;left:50%;transform:translateX(-50%);background:rgba(0,0,0,.6);color:#aaa;font-size:11px;padding:5px 12px;border-radius:20px;pointer-events:none; }
+select { background:#2a2a35;border:1px solid #3a3a48;color:#ccc;padding:5px 8px;border-radius:5px;font-size:12px; }
+</style>
+</head>
+<body>
+<div id="toolbar">
+  <h1>⚡ Arc Raiders</h1>
+  <div class="tool-group"><label>Map</label>
+    <select id="map-select">
+      <option value="buried_city">Buried City</option>
+      <option value="stella_montis">Stella Montis</option>
+      <option value="meta_forge">Meta Forge</option>
+    </select>
+  </div>
+  <div class="tool-group"><label>Tool</label>
+    <button id="btn-circle" class="active" onclick="setTool('circle')">○ Circle</button>
+    <button id="btn-freehand" onclick="setTool('freehand')">✏ Freehand</button>
+  </div>
+  <div class="tool-group"><label>Color</label>
+    <button class="color-btn active" style="background:#ff4d4d" data-color="#ff4d4d" onclick="setColor(this)" title="Danger"></button>
+    <button class="color-btn" style="background:#4dff91" data-color="#4dff91" onclick="setColor(this)" title="Loot"></button>
+    <button class="color-btn" style="background:#4da6ff" data-color="#4da6ff" onclick="setColor(this)" title="Extract"></button>
+    <button class="color-btn" style="background:#ffd24d" data-color="#ffd24d" onclick="setColor(this)" title="Note"></button>
+    <button class="color-btn" style="background:#cc66ff" data-color="#cc66ff" onclick="setColor(this)" title="Custom"></button>
+  </div>
+  <div class="tool-group"><label>Size</label><input type="range" id="size-slider" min="10" max="120" value="40"></div>
+  <div class="tool-group">
+    <button onclick="undoLast()">↩ Undo</button>
+    <button onclick="clearAll()">🗑 Clear</button>
+  </div>
+</div>
+<div id="canvas-wrap">
+  <canvas id="bg-canvas"></canvas>
+  <canvas id="draw-canvas"></canvas>
+  <div id="hint">Click & drag to draw a circle • Right-click to erase</div>
+</div>
+<script>
+const bgC=document.getElementById('bg-canvas'),dC=document.getElementById('draw-canvas');
+const bgX=bgC.getContext('2d'),ctx=dC.getContext('2d');
+const wrap=document.getElementById('canvas-wrap');
+let tool='circle',color='#ff4d4d',size=40,shapes=[],drawing=false,startX,startY,fp=[];
+const maps={
+  buried_city:{bg:'#1a1510',grid:'#2a2018',ac:'#4a3820',name:'BURIED CITY',z:['Outskirts','Market District','Underground','Tower Block','Subway']},
+  stella_montis:{bg:'#101820',grid:'#182030',ac:'#203040',name:'STELLA MONTIS',z:['Alpine Base','Research Lab','Gondola Station','Summit','Caves']},
+  meta_forge:{bg:'#121820',grid:'#1a2830',ac:'#243040',name:'META FORGE',z:['Entrance','Assembly Floor','Reactor Core','Warehouse','Loading Bay']}
+};
+function resize(){const w=wrap.clientWidth,h=wrap.clientHeight;bgC.width=dC.width=w;bgC.height=dC.height=h;drawBG();redraw();}
+function drawBG(){
+  const id=document.getElementById('map-select').value,t=maps[id],w=bgC.width,h=bgC.height;
+  bgX.fillStyle=t.bg;bgX.fillRect(0,0,w,h);
+  bgX.strokeStyle=t.grid;bgX.lineWidth=1;
+  for(let x=0;x<w;x+=50){bgX.beginPath();bgX.moveTo(x,0);bgX.lineTo(x,h);bgX.stroke();}
+  for(let y=0;y<h;y+=50){bgX.beginPath();bgX.moveTo(0,y);bgX.lineTo(w,y);bgX.stroke();}
+  const zn=[{x:.05,y:.05,w:.25,h:.35},{x:.35,y:.08,w:.30,h:.28},{x:.70,y:.05,w:.25,h:.40},{x:.10,y:.55,w:.35,h:.35},{x:.55,y:.50,w:.38,h:.40}];
+  zn.forEach((z,i)=>{
+    bgX.fillStyle=t.ac;bgX.globalAlpha=.5;bgX.fillRect(z.x*w,z.y*h,z.w*w,z.h*h);
+    bgX.globalAlpha=1;bgX.strokeStyle='#3a4050';bgX.lineWidth=1.5;bgX.strokeRect(z.x*w,z.y*h,z.w*w,z.h*h);
+    bgX.fillStyle='#667080';bgX.font='bold 11px Segoe UI';bgX.textAlign='center';
+    bgX.fillText(t.z[i]||'',(z.x+z.w/2)*w,(z.y+z.h/2)*h);
+  });
+  bgX.strokeStyle='#3a4050';bgX.lineWidth=8;
+  [[.30,.22,.35,.22],[.65,.22,.70,.22],[.18,.40,.18,.55],[.70,.45,.70,.50],[.45,.36,.45,.50]].forEach(l=>{bgX.beginPath();bgX.moveTo(l[0]*w,l[1]*h);bgX.lineTo(l[2]*w,l[3]*h);bgX.stroke();});
+  bgX.fillStyle='#c8a84b';bgX.font='bold 18px Segoe UI';bgX.textAlign='left';bgX.fillText(t.name,16,h-16);
+  const leg=[{c:'#ff4d4d',l:'Danger'},{c:'#4dff91',l:'Loot'},{c:'#4da6ff',l:'Extract'},{c:'#ffd24d',l:'Note'},{c:'#cc66ff',l:'Custom'}];
+  bgX.textAlign='right';bgX.font='11px Segoe UI';
+  leg.forEach((item,i)=>{bgX.fillStyle=item.c;bgX.globalAlpha=.85;bgX.beginPath();bgX.arc(w-86,h-16-i*20,5,0,Math.PI*2);bgX.fill();bgX.globalAlpha=1;bgX.fillStyle='#888';bgX.fillText(item.l,w-16,h-12-i*20);});
+}
+function redraw(){ctx.clearRect(0,0,dC.width,dC.height);shapes.forEach(s=>ds(s));}
+function ds(s){ctx.globalAlpha=.75;ctx.strokeStyle=s.color;ctx.lineWidth=2.5;ctx.fillStyle=s.color+'33';
+  if(s.type==='circle'){ctx.beginPath();ctx.ellipse(s.cx,s.cy,s.rx,s.ry,0,0,Math.PI*2);ctx.fill();ctx.stroke();}
+  else if(s.type==='free'&&s.pts.length>1){ctx.beginPath();ctx.moveTo(s.pts[0].x,s.pts[0].y);s.pts.forEach(p=>ctx.lineTo(p.x,p.y));ctx.stroke();}
+  ctx.globalAlpha=1;}
+dC.addEventListener('mousedown',e=>{if(e.button===2){rce(e);return;}drawing=true;startX=e.offsetX;startY=e.offsetY;if(tool==='freehand')fp=[{x:startX,y:startY}];});
+dC.addEventListener('mousemove',e=>{if(!drawing)return;const x=e.offsetX,y=e.offsetY;
+  if(tool==='circle'){redraw();const rx=Math.abs(x-startX)/2+size/4,ry=Math.abs(y-startY)/2+size/4,cx=(startX+x)/2,cy=(startY+y)/2;ds({type:'circle',cx,cy,rx,ry,color});}
+  else if(tool==='freehand'){fp.push({x,y});redraw();ds({type:'free',pts:fp,color});}});
+dC.addEventListener('mouseup',e=>{if(!drawing)return;drawing=false;const x=e.offsetX,y=e.offsetY;
+  if(tool==='circle'){const rx=Math.max(10,Math.abs(x-startX)/2+size/4),ry=Math.max(10,Math.abs(y-startY)/2+size/4),cx=(startX+x)/2,cy=(startY+y)/2;shapes.push({type:'circle',cx,cy,rx,ry,color});}
+  else if(tool==='freehand'&&fp.length>1)shapes.push({type:'free',pts:[...fp],color});redraw();});
+dC.addEventListener('contextmenu',e=>e.preventDefault());
+function rce(e){const x=e.offsetX,y=e.offsetY;shapes=shapes.filter(s=>{if(s.type==='circle'){const dx=x-s.cx,dy=y-s.cy;return!((dx*dx)/(s.rx*s.rx)+(dy*dy)/(s.ry*s.ry)<=1.5);}return true;});redraw();}
+function setTool(t){tool=t;document.querySelectorAll('#toolbar button[id^=btn]').forEach(b=>b.classList.remove('active'));document.getElementById('btn-'+t)?.classList.add('active');}
+function setColor(btn){color=btn.dataset.color;document.querySelectorAll('.color-btn').forEach(b=>b.classList.remove('active'));btn.classList.add('active');}
+function undoLast(){shapes.pop();redraw();}
+function clearAll(){if(confirm('Clear all?')){shapes=[];redraw();}}
+document.getElementById('size-slider').addEventListener('input',e=>size=+e.target.value);
+document.getElementById('map-select').addEventListener('change',()=>{shapes=[];drawBG();redraw();});
+window.addEventListener('resize',resize);
+resize();
+</script>
+</body>
+</html>
